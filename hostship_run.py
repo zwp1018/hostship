@@ -26,33 +26,17 @@ def send_tg_notification(message, photo_path=None):
         return
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"})
+        requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"}, timeout=10)
         if photo_path and os.path.exists(photo_path):
             with open(photo_path, "rb") as f:
                 requests.post(
                     f"https://api.telegram.org/bot{token}/sendPhoto",
-                    data={"chat_id": chat_id, "caption": "Host-Ship 状态监控"},
-                    files={"photo": f}
+                    data={"chat_id": chat_id, "caption": "Host-Ship 实时画面"},
+                    files={"photo": f},
+                    timeout=20
                 )
     except Exception as e:
         print(f"TG 通知异常: {e}")
-
-# ================== CF 过盾 ==================
-def wait_for_turnstile(sb, timeout: int = 15) -> bool:
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            success = sb.execute_script('''
-                var resp = document.querySelector('input[name="cf-turnstile-response"]');
-                if (resp && resp.value && resp.value.length > 20) return true;
-                return false;
-            ''')
-            if success:
-                return True
-        except:
-            pass
-        time.sleep(1)
-    return False
 
 # ================== 续期逻辑 ==================
 def process_renewal(sb):
@@ -61,26 +45,26 @@ def process_renewal(sb):
     # 1. 点击 MANAGE SERVER 进入详情页
     try:
         print("🔍 正在查找 'MANAGE SERVER' 按钮...")
-        # 优先匹配大写和小写的 Manage Server 按钮
         server_selectors = [
             "a:contains('MANAGE SERVER')", 
             "button:contains('MANAGE SERVER')",
             "a:contains('Manage Server')",
             "button:contains('Manage Server')",
-            'a[href*="/server/"]' # 兜底策略
+            'a[href*="/server/"]'
         ]
         
         found = False
         for selector in server_selectors:
             if sb.is_element_visible(selector):
-                print("✅ 找到 'MANAGE SERVER' 入口，点击进入控制台...")
+                print(f"✅ 找到入口，点击进入控制台...")
                 sb.click(selector)
                 found = True
                 break
         
         if not found:
             print("⚠️ 未能在主页找到 'MANAGE SERVER' 按钮，当前账号下可能没有服务器。")
-            send_tg_notification("⚠️ <b>Host-Ship 状态</b>\n账号登录成功，但未发现 Manage Server 按钮。")
+            sb.save_screenshot("hostship_no_server.png")
+            send_tg_notification("⚠️ <b>Host-Ship 状态</b>\n账号登录成功，但未发现 Manage Server 按钮。", "hostship_no_server.png")
             return
 
     except Exception as e:
@@ -93,14 +77,12 @@ def process_renewal(sb):
     
     # 2. 抓取页面上的续期信息
     try:
-        # 获取所有文本来匹配倒计时 (比如 "RENEWAL IN 30 Days")
         page_text = sb.get_text("body")
         days_match = re.search(r'RENEWAL IN\s*(\d+\s*Days)', page_text, re.IGNORECASE)
         days_left = days_match.group(1) if days_match else "未知天数"
         
         print(f"📅 当前续期倒计时: {days_left}")
         
-        # 寻找续期按钮
         renew_button_selector = "button:contains('Renew'), button:contains('RENEW'), a:contains('Renew')"
         
         if sb.is_element_visible(renew_button_selector):
@@ -108,8 +90,6 @@ def process_renewal(sb):
             
             if "Limit Reached" in btn_text or "limit reached" in btn_text.lower():
                 print(f"ℹ️ 按钮显示 '{btn_text}', 还没到可续期的时间")
-                
-                # 发送未到续期时间的通知
                 msg = f"⏳ <b>Host-Ship 续期检查</b>\n服务器倒计时: <code>{days_left}</code>\n状态: 还没到可续期的时间 ({btn_text})"
                 sb.save_screenshot("hostship_limit.png")
                 send_tg_notification(msg, "hostship_limit.png")
@@ -118,7 +98,6 @@ def process_renewal(sb):
                 sb.click(renew_button_selector)
                 time.sleep(5)
                 
-                # 尝试自动确认
                 try:
                     if sb.is_element_visible("button:contains('Confirm')") or sb.is_element_visible("button.btn-primary"):
                          sb.click("button:contains('Confirm'), button.btn-primary")
@@ -153,8 +132,8 @@ def run():
         chromium_arg="--disable-blink-features=AutomationControlled",
     )
     
-    # 启用代理取消下方注释
-    # sb_kwargs["proxy"] = "socks5://127.0.0.1:40000"
+    # 如果你在 Action 开启了 sing-box 代理，请取消下面这行的注释
+    # sb_kwargs["proxy"] = "socks5://127.0.0.1:1080"
 
     try:
         with SB(**sb_kwargs) as sb:
@@ -166,34 +145,33 @@ def run():
 
             if "login" in sb.get_current_url() or sb.is_element_visible(user_selector):
                 try:
+                    print("📝 正在输入账号密码...")
                     sb.wait_for_element_visible(user_selector, timeout=10)
                     sb.update_text(user_selector, EMAIL)
                     sb.update_text("input[type='password']", PASSWORD)
                     time.sleep(1)
                     
-                    print("🔒 检查 Cloudflare 验证...")
-                    already_done = wait_for_turnstile(sb, timeout=5)
-                    if not already_done:
-                        for _ in range(3):
-                            try: sb.uc_gui_click_captcha()
-                            except: pass
-                            time.sleep(2)
-                            if wait_for_turnstile(sb, timeout=8): break
-                    
-                    print("✅ 已通过 Cloudflare 验证 (或本来就没有)")
-                    
+                    print("➡️ 提交登录表单...")
                     sb.type("input[type='password']", "\n")
-                    time.sleep(12) 
+                    
+                    # 提交后等待网页响应跳转
+                    time.sleep(10) 
 
                 except Exception as e:
                     print(f"❌ 登录动作异常: {e}")
+                    sb.save_screenshot("hostship_login_error.png")
+                    send_tg_notification("❌ <b>Host-Ship 异常</b>\n执行填表时发生错误。", "hostship_login_error.png")
                     sys.exit(1)
 
+            print("🔍 检查登录结果...")
             time.sleep(3)
             current_url = sb.get_current_url()
             
+            # 如果提交后还在登录页，说明密码错误或被禁止访问
             if "login" in current_url or sb.is_element_visible(user_selector):
-                print("❌ 登录失败！账号密码错误或验证码拦截。")
+                print("❌ 登录失败！账号密码错误或被系统阻断。")
+                sb.save_screenshot("hostship_login_failed.png")
+                send_tg_notification("❌ <b>Host-Ship 登录失败</b>\n请查看截图排查原因（密码错误或被封锁）。", "hostship_login_failed.png")
                 sys.exit(1)
             else:
                 print(f"✅ 登录成功，当前 URL: {current_url}")
