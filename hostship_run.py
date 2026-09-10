@@ -145,17 +145,30 @@ def run():
 
             if "login" in sb.get_current_url() or sb.is_element_visible(user_selector):
                 try:
-                    print("📝 正在输入账号密码...")
+                   print("📝 正在输入账号密码...")
                     sb.wait_for_element_visible(user_selector, timeout=10)
-                    sb.update_text(user_selector, EMAIL)
-                    sb.update_text("input[type='password']", PASSWORD)
+                    # 清空并输入邮箱
+                    sb.clear(user_selector)
+                    sb.type(user_selector, EMAIL)
+                    
+                    # 使用更精确的密码框选择器
+                    pwd_selector = "input[name='password'], input[type='password']"
+                    sb.wait_for_element_visible(pwd_selector, timeout=5)
+                    sb.clear(pwd_selector)
+                    sb.type(pwd_selector, PASSWORD)
                     time.sleep(1)
                     
-                    print("➡️ 提交登录表单...")
-                    sb.type("input[type='password']", "\n")
+                    print("➡️ 寻找并点击 Sign In 按钮...")
+                    # 优先点击屏幕上的 Sign In 按钮，而不是盲目敲回车
+                    submit_selector = "button:contains('Sign In'), button[type='submit']"
+                    if sb.is_element_visible(submit_selector):
+                        sb.click(submit_selector)
+                    else:
+                        print("未找到 Sign In 按钮，尝试回车提交...")
+                        sb.type(pwd_selector, "\n")
                     
                     # 提交后等待网页响应跳转
-                    time.sleep(10) 
+                    time.sleep(10)
 
                 except Exception as e:
                     print(f"❌ 登录动作异常: {e}")
