@@ -38,6 +38,23 @@ def send_tg_notification(message, photo_path=None):
     except Exception as e:
         print(f"TG 通知异常: {e}")
 
+# ================== CF 过盾逻辑 ==================
+def wait_for_turnstile(sb, timeout: int = 15) -> bool:
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            success = sb.execute_script('''
+                var resp = document.querySelector('input[name="cf-turnstile-response"]');
+                if (resp && resp.value && resp.value.length > 20) return true;
+                return false;
+            ''')
+            if success:
+                return True
+        except:
+            pass
+        time.sleep(1)
+    return False
+
 # ================== 续期逻辑 ==================
 def process_renewal(sb):
     time.sleep(5) 
@@ -103,7 +120,6 @@ def process_renewal(sb):
                 # 尝试点击二次确认弹窗里的 "Renew now"
                 try:
                     print("👀 正在寻找弹窗中的 'Renew now' 确认按钮...")
-                    # 增加了 'Renew now' 选择器
                     confirm_selector = "button:contains('Renew now'), button:contains('Confirm'), button.btn-primary"
                     
                     if sb.is_element_visible(confirm_selector):
@@ -166,20 +182,32 @@ def run():
                     sb.type(pwd_selector, PASSWORD)
                     time.sleep(1)
                     
-                    print("➡️ 寻找并点击 Sign In 按钮...")
-                    submit_selector = "button:contains('Sign In'), button[type='submit']"
+                    print("🔒 检查 Cloudflare 验证...")
+                    already_done = wait_for_turnstile(sb, timeout=5)
+                    if not already_done:
+                        for _ in range(3):
+                            try: sb.uc_gui_click_captcha()
+                            except: pass
+                            time.sleep(2)
+                            if wait_for_turnstile(sb, timeout=8): break
+                    print("✅ 已通过 Cloudflare 验证 (或本来就没有)")
+                    
+                    print("➡️ 寻找并点击提交按钮...")
+                    # 兼容 "Complete the security check" 和 "Sign In" 按钮
+                    submit_selector = "button:contains('Complete the security check'), button:contains('Sign In'), button[type='submit']"
+                    
                     if sb.is_element_visible(submit_selector):
                         sb.click(submit_selector)
                     else:
-                        print("未找到 Sign In 按钮，尝试回车提交...")
+                        print("未找到提交按钮，尝试回车提交...")
                         sb.type(pwd_selector, "\n")
                     
-                    time.sleep(10) 
+                    time.sleep(12) 
 
                 except Exception as e:
                     print(f"❌ 登录动作异常: {e}")
                     sb.save_screenshot("hostship_login_error.png")
-                    send_tg_notification("❌ <b>Host-Ship 异常</b>\n执行填表时发生错误。", "hostship_login_error.png")
+                    send_tg_notification("❌ <b>Host-Ship 异常</b>\n执行填表或过盾时发生错误。", "hostship_login_error.png")
                     sys.exit(1)
 
             print("🔍 检查登录结果...")
