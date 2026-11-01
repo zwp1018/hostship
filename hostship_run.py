@@ -88,7 +88,7 @@ def process_renewal(sb):
         print(f"进入服务器详情页失败: {e}")
         return
 
-    time.sleep(6)
+    time.sleep(8) # 增加等待时间确保侧边栏加载
     current_server_url = sb.get_current_url()
     print(f"🌐 打开服务器控制台: {current_server_url}")
     
@@ -96,6 +96,10 @@ def process_renewal(sb):
     try:
         page_text = sb.get_text("body")
         days_match = re.search(r'RENEWAL IN\s*(\d+\s*Days)', page_text, re.IGNORECASE)
+        if not days_match:
+            # 兼容截图右侧的 "11 Days" 格式
+            days_match = re.search(r'EXPIRES.*?\n(\d+\s*Days)', page_text, re.IGNORECASE)
+            
         days_left = days_match.group(1) if days_match else "未知天数"
         
         print(f"📅 当前续期倒计时: {days_left}")
@@ -106,8 +110,8 @@ def process_renewal(sb):
             btn_text = sb.get_text(renew_button_selector).strip()
             
             if "Limit Reached" in btn_text or "limit reached" in btn_text.lower():
-                print(f"ℹ️ 按钮显示 '{btn_text}', 还没到可续期的时间")
-                msg = f"⏳ <b>Host-Ship 续期检查</b>\n服务器倒计时: <code>{days_left}</code>\n状态: 还没到可续期的时间 ({btn_text})"
+                print(f"ℹ️ 按钮显示 '{btn_text}', 已达续期上限(如14天)，无需操作")
+                msg = f"⏳ <b>Host-Ship 续期检查</b>\n服务器剩余: <code>{days_left}</code>\n状态: 已达续期上限无需操作 ({btn_text})"
                 sb.save_screenshot("hostship_limit.png")
                 send_tg_notification(msg, "hostship_limit.png")
             else:
@@ -115,21 +119,23 @@ def process_renewal(sb):
                 sb.click(renew_button_selector)
                 
                 # 等待弹窗出现
-                time.sleep(3) 
+                time.sleep(5) 
                 
-                # 尝试点击二次确认弹窗里的 "Renew now"
+                # 尝试点击二次确认弹窗里的最终按钮
                 try:
-                    print("👀 正在寻找弹窗中的 'Renew now' 确认按钮...")
-                    confirm_selector = "button:contains('Renew now'), button:contains('Confirm'), button.btn-primary"
+                    print("👀 正在寻找弹窗中的确认按钮...")
+                    # ================= 核心修复 =================
+                    # 兼容 "Add 3 days", "Add ", "Renew now", "Confirm" 等多种面板可能出现的文案
+                    confirm_selector = "button:contains('Add 3 days'), button:contains('Add '), button:contains('Renew now'), button:contains('Confirm'), button.btn-primary"
                     
                     if sb.is_element_visible(confirm_selector):
                         print("✅ 找到弹窗确认按钮，执行点击！")
                         sb.click(confirm_selector)
-                        time.sleep(3)
+                        time.sleep(5)
                     else:
-                        print("⚠️ 没有发现二次确认弹窗，可能面板改变了逻辑。")
+                        print("⚠️ 没有发现二次确认按钮，请检查截图面板是否再次改版。")
                 except Exception as e:
-                    print(f"点击二次确认按钮时发生小错误: {e}")
+                    print(f"点击二次确认按钮时发生异常: {e}")
                 
                 sb.save_screenshot("hostship_renew_success.png")
                 msg = f"🎉 <b>Host-Ship 续期成功</b>\n已成功完成二次确认续期操作！\n原剩余时间: {days_left}"
@@ -158,20 +164,21 @@ def run():
         chromium_arg="--disable-blink-features=AutomationControlled",
     )
     
+    # 开启代理请取消下方注释（根据你工作流的代理端口填写）
     # sb_kwargs["proxy"] = "socks5://127.0.0.1:1080"
 
     try:
         with SB(**sb_kwargs) as sb:
             print(f"🚀 打开登录页: {HOSTSHIP_LOGIN}")
             sb.uc_open_with_reconnect(HOSTSHIP_LOGIN, reconnect_time=8)
-            time.sleep(5)
+            time.sleep(8)
 
             user_selector = "input[name='user'], input[name='username'], input[type='text'], input[type='email']"
 
             if "login" in sb.get_current_url() or sb.is_element_visible(user_selector):
                 try:
                     print("📝 正在输入账号密码...")
-                    sb.wait_for_element_visible(user_selector, timeout=10)
+                    sb.wait_for_element_visible(user_selector, timeout=15)
                     
                     sb.clear(user_selector)
                     sb.type(user_selector, EMAIL)
@@ -180,7 +187,7 @@ def run():
                     sb.wait_for_element_visible(pwd_selector, timeout=5)
                     sb.clear(pwd_selector)
                     sb.type(pwd_selector, PASSWORD)
-                    time.sleep(1)
+                    time.sleep(2)
                     
                     print("🔒 检查 Cloudflare 验证...")
                     already_done = wait_for_turnstile(sb, timeout=5)
@@ -188,7 +195,7 @@ def run():
                         for _ in range(3):
                             try: sb.uc_gui_click_captcha()
                             except: pass
-                            time.sleep(2)
+                            time.sleep(3)
                             if wait_for_turnstile(sb, timeout=8): break
                     print("✅ 已通过 Cloudflare 验证 (或本来就没有)")
                     
@@ -202,7 +209,7 @@ def run():
                         print("未找到提交按钮，尝试回车提交...")
                         sb.type(pwd_selector, "\n")
                     
-                    time.sleep(12) 
+                    time.sleep(15) 
 
                 except Exception as e:
                     print(f"❌ 登录动作异常: {e}")
@@ -211,7 +218,7 @@ def run():
                     sys.exit(1)
 
             print("🔍 检查登录结果...")
-            time.sleep(3)
+            time.sleep(5)
             current_url = sb.get_current_url()
             
             if "login" in current_url or sb.is_element_visible(user_selector):
